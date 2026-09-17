@@ -88,6 +88,12 @@ Comparison featuring full-body framing with natural skin textures, defined facia
 
 ## 🚀 Usage
 
+<div align="center">
+  <img src="assets/dlss5_ui_preview.png" alt="DLSS 5 Neural Enhancer Integrated Accordion UI" width="950">
+</div>
+
+<br>
+
 1. Open WebUI Forge in your browser.
 2. In the **txt2img** or **img2img** tab, expand the **DLSS 5 Neural Enhancer Integrated** accordion.
 3. Check the accordion header to enable DLSS 5.
