@@ -1,6 +1,9 @@
+import hashlib
 import os
-import sys
+import re
 import shutil
+import subprocess
+import sys
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -78,3 +81,70 @@ if missing:
         if still_missing:
             print(f"[sd-forge-dlss5] Warning: Runtime binaries incomplete ({still_missing}).")
             print("[sd-forge-dlss5] Please place nvngx.dll, dxgi.dll, renodx-dlss5.addon64, nvngx_dlssnr.dll into bin/runtime/")
+
+# RTX 20-series (Turing): the stock nvngx_dlssnr.dll refuses to create the DLSS NR
+# feature on Turing (error 0xbad00001). The community SF-v2 build of the same SDK
+# version runs it. Only the neural DLL is swapped; every other file stays stock.
+SFV2_NEURAL_URL = "https://github.com/RankFTW/rhi-repo/releases/download/dlssnr-310.8.SF-v2/nvngx_dlssnr_310.8.SF-v2.zip"
+SFV2_NEURAL_SHA256 = "6eb209e764f39872625debd6abaf45e2bb6322f6f270f781f70c059ae30b3927"
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_turing():
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        nvidia_smi = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "nvidia-smi.exe")
+    if not os.path.isfile(nvidia_smi):
+        return False
+    try:
+        result = subprocess.run(
+            [nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+    except Exception:
+        return False
+    return bool(re.search(r"\bRTX\s+20\d{2}\b", result.stdout or "", re.IGNORECASE))
+
+
+def swap_in_sfv2_neural_dll():
+    neural_dll = runtime_dir / "nvngx_dlssnr.dll"
+    if neural_dll.exists() and sha256_file(neural_dll) == SFV2_NEURAL_SHA256:
+        print("[sd-forge-dlss5] SF-v2 neural runtime already in place.")
+        return
+    zip_path = runtime_dir / "sf-v2-neural.zip"
+    try:
+        print("[sd-forge-dlss5] Turing (RTX 20-series) detected: fetching SF-v2 neural runtime (~117 MB)...")
+        req = urllib.request.Request(SFV2_NEURAL_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(zip_path, "wb") as out_f:
+            shutil.copyfileobj(resp, out_f)
+        with zipfile.ZipFile(str(zip_path), "r") as zf:
+            members = [m for m in zf.namelist() if os.path.basename(m).lower() == "nvngx_dlssnr.dll"]
+            if len(members) != 1:
+                raise RuntimeError("unexpected SF-v2 archive layout")
+            with zf.open(members[0]) as src, open(f"{neural_dll}.tmp", "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        if sha256_file(f"{neural_dll}.tmp") != SFV2_NEURAL_SHA256:
+            raise RuntimeError("downloaded DLL hash mismatch")
+        os.replace(f"{neural_dll}.tmp", neural_dll)
+        print("[sd-forge-dlss5] SF-v2 neural runtime installed for Turing.")
+    except Exception as e:
+        print(f"[sd-forge-dlss5] Warning: could not install SF-v2 neural runtime ({e}).")
+        print("[sd-forge-dlss5] DLSS NR will not run on Turing without it; fix and restart to retry.")
+    finally:
+        if zip_path.exists():
+            try:
+                zip_path.unlink()
+            except Exception:
+                pass
+
+
+if is_turing():
+    swap_in_sfv2_neural_dll()
