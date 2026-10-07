@@ -2,9 +2,27 @@ import logging
 import os
 import platform
 import subprocess
+from pathlib import Path
+
 import torch
 
 logger = logging.getLogger("dlss5.hardware")
+
+# nvngx_dlssnr.dll builds identified by exact file size (RankFTW/rhi-repo releases);
+# any other size means the stock DLL from the Streamline package.
+NEURAL_DLL_SIZES = {
+    165830144: "310.8.SF-v2",
+    165840496: "310.8.0-RTX40",
+}
+
+_runtime_reported = False
+
+
+def describe_neural_runtime(device_name: str) -> str:
+    dll = Path(__file__).resolve().parent.parent / "bin" / "runtime" / "nvngx_dlssnr.dll"
+    size = dll.stat().st_size if dll.is_file() else 0
+    build = NEURAL_DLL_SIZES.get(size, "stock" if size else "missing")
+    return f"GPU: {device_name} | nvngx_dlssnr.dll: {build}"
 
 
 def check_hardware_compatibility() -> tuple[bool, str]:
@@ -13,6 +31,7 @@ def check_hardware_compatibility() -> tuple[bool, str]:
     1. 64-bit Windows OS (DirectX 12 Agility requirement).
     2. NVIDIA GeForce RTX series GPU (Compute Capability >= 7.5: Turing, Ampere, Ada Lovelace, Blackwell).
     """
+    global _runtime_reported
     # 1. OS check
     if platform.system() != "Windows":
         return False, f"DLSS 5 requires Windows 10/11 64-bit with DirectX 12 support (current OS: {platform.system()})."
@@ -34,6 +53,9 @@ def check_hardware_compatibility() -> tuple[bool, str]:
         if major < 7 or (major == 7 and minor < 5):
             return False, f"GPU '{device_name}' (Compute Capability {major}.{minor}) is not supported. DLSS 5 requires RTX 20/30/40/50 series (Compute Capability >= 7.5)."
 
+        if not _runtime_reported:
+            _runtime_reported = True
+            print(f"[sd-forge-dlss5] {describe_neural_runtime(device_name)}")
         logger.info(f"DLSS 5 Hardware Check Passed: {device_name} (Compute Capability {major}.{minor})")
         return True, f"Compatible ({device_name})"
 
